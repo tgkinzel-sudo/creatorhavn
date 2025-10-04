@@ -1,0 +1,34 @@
+name: agent-generate
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *" # täglich 06:17 UTC
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # zum Committen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run Content Agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cd agents
+          npm ci || npm install
+          npm run generate
+
+      - name: Commit & Push changes (if any)
+        run: |
+          git config user.name "creatorhavn-agent"
+          git config user.email "agent@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(agent): refresh creator profiles" || echo "no changes"
+          git push
