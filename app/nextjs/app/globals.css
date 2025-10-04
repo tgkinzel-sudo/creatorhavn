@@ -1,0 +1,4 @@
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { background: #fff; color: #111; }
+a:hover { opacity: .9; }
