@@ -1,0 +1,12 @@
+# --- Next.js Build (robust ohne lockfile) ---
+- name: Build Next.js app
+  working-directory: app/nextjs
+  run: |
+    if [ -f package-lock.json ]; then
+      echo "Found package-lock.json -> using npm ci"
+      npm ci
+    else
+      echo "No package-lock.json -> using npm install (will generate lockfile)"
+      npm install
+    fi
+    npm run build
