@@ -1,34 +1,31 @@
 name: agent-generate
+
 on:
-  workflow_dispatch:
+  workflow_dispatch:       # per Klick starten
   schedule:
-    - cron: "17 6 * * *" # täglich 06:17 UTC
+    - cron: "0 6 * * *"    # optional: täglich 06:00 UTC
+
+permissions:
+  contents: read
 
 jobs:
-  run:
+  run-agent:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # zum Committen
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Run Content Agent
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: Install deps (Next app)
+        working-directory: app/nextjs
         run: |
-          cd agents
           npm ci || npm install
-          npm run generate
 
-      - name: Commit & Push changes (if any)
+      - name: Run Agent
+        working-directory: app/nextjs
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          git config user.name "creatorhavn-agent"
-          git config user.email "agent@users.noreply.github.com"
-          git add -A
-          git commit -m "chore(agent): refresh creator profiles" || echo "no changes"
-          git push
+          node scripts/agent_generate.mjs
