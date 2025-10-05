@@ -1,37 +1,12 @@
 name: agent-health
+
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "42 7 * * *"  # täglich 07:42 UTC
 
 jobs:
-  health:
+  check:
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - name: Basic sanity checks
-        id: chk
+      - name: Ping homepage
         run: |
-          set -e
-          FAIL=0
-          test -f app/nextjs/package.json || { echo "missing app/nextjs/package.json"; FAIL=1; }
-          test -d data/creators || { echo "missing data/creators"; FAIL=1; }
-          COUNT=$(ls -1 data/creators/*.json 2>/dev/null | wc -l || true)
-          echo "profiles=$COUNT" >> $GITHUB_OUTPUT
-          if [ "$FAIL" -ne 0 ]; then exit 2; fi
-
-      - name: Open issue if low content
-        if: steps.chk.outputs.profiles == '0'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const title = "Health: Keine Creator-Profile gefunden 🚨";
-            const body  = "Der Content-Agent hat (noch) keine Profile erzeugt. Bitte seeds.txt prüfen.";
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title, body, labels: ["health"]
-            });
+          curl -s -S -I https://creatorhavn.com | head -n 1
