@@ -1,0 +1,40 @@
+name: agent-generate
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"   # täglich 06:00 UTC
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: 1
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: |
+          npm ci || npm install
+
+      - name: Run Agent
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SEED_MODE: dummy  # später 'live'
+        run: |
+          npx ts-node --transpile-only scripts/agent_generate.ts
+
+      - name: Revalidate site
+        if: success()
+        env:
+          BASE: ${{ vars.BASE_URL || 'https://creatorhavn.com' }}
+        run: |
+          curl -s -X POST "$BASE/api/revalidate" || true
