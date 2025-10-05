@@ -1,7 +1,6 @@
 {
 cd app/nextjs
 npm install stripe
-
   "name": "creatorhavn",
   "private": true,
   "scripts": {
