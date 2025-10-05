@@ -1,15 +1,15 @@
 // app/nextjs/app/page.jsx
-export const revalidate = 0; // kein Caching -> immer frische Daten
+export const revalidate = 0; // kein Caching -> immer frisch
 
 import { Pool } from "pg";
 
-// Einen globalen Pool wiederverwenden (verhindert zu viele Verbindungen)
+// globalen Pool wiederverwenden (vermeidet zu viele Verbindungen)
 let _pool;
 function getPool() {
   if (!_pool) {
     _pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false }
+      ssl: { rejectUnauthorized: false } // funktioniert mit Neon etc.
     });
   }
   return _pool;
@@ -42,7 +42,6 @@ export default async function Home() {
           {data.map((c) => (
             <li key={c.id} className="border rounded-xl p-4">
               <div className="flex items-center gap-3">
-                {/* Fallback-Avatar */}
                 <img
                   src={c.avatar_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${encodeURIComponent(c.display_name)}`}
                   alt=""
