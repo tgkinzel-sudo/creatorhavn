@@ -1,114 +1,66 @@
 // app/nextjs/app/api/stripe/webhook/route.ts
+import { NextResponse } from "next/server";
+import { headers } from "next/headers";
 import Stripe from "stripe";
-import { NextRequest, NextResponse } from "next/server";
-import { pool } from "@/lib/db";
 
-export const config = {
-  api: { bodyParser: false }
-};
+// App Router: Runtime & Caching korrekt setzen
+export const runtime = "nodejs";          // nicht Edge – Stripe braucht Node
+export const dynamic = "force-dynamic";   // kein Static/Caching für Webhooks
 
-function bufferToString(buf: ArrayBuffer) {
-  const decoder = new TextDecoder("utf-8");
-  return decoder.decode(buf);
-}
+// Stripe SDK initialisieren (achte auf die API-Version zu deinem Account)
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-06-20", // falls nötig, auf deine Stripe-Version anpassen
+});
 
-export async function POST(req: NextRequest) {
-  const stripeSecret = process.env.STRIPE_SECRET_KEY;
+export async function POST(req: Request) {
+  // Stripe sendet Signatur im Header
+  const sig = headers().get("stripe-signature");
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-  if (!stripeSecret || !webhookSecret) {
-    return NextResponse.json(
-      { error: "Stripe secrets not configured" },
-      { status: 500 }
-    );
+  if (!sig || !webhookSecret) {
+    return new NextResponse("Missing Stripe signature or webhook secret", { status: 400 });
   }
 
-  const stripe = new Stripe(stripeSecret, { apiVersion: "2024-06-20" });
-
-  const sig = req.headers.get("stripe-signature");
-  if (!sig) {
-    return NextResponse.json({ error: "Missing stripe-signature" }, { status: 400 });
-  }
+  // WICHTIG: Im App Router selbst den RAW Body lesen
+  const rawBody = await req.text();
 
   let event: Stripe.Event;
   try {
-    const rawBody = await req.arrayBuffer();
-    const payload = bufferToString(rawBody);
-    event = stripe.webhooks.constructEvent(payload, sig, webhookSecret);
+    event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
   } catch (err: any) {
-    console.error("Webhook signature verification failed:", err.message);
-    return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
+    // Verifizierungsfehler → sofort 400
+    return new NextResponse(`Webhook Error: ${err.message}`, { status: 400 });
   }
 
+  // Business-Logik (vereinfacht – passe an deine App an)
   try {
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object as Stripe.Checkout.Session;
-
-      const creatorId = session.metadata?.creator_id || null;
-      const customerId = session.customer?.toString() || null;
-      const subscriptionId = session.subscription?.toString() || null;
-
-      const priceId =
-        (session as any).line_items?.data?.[0]?.price?.id ||
-        (session as any).display_items?.[0]?.plan?.id ||
-        null;
-
-      const amountTotal = (session as any).amount_total ?? 0;
-      const currency = (session as any).currency
-        ? String((session as any).currency).toUpperCase()
-        : "EUR";
-
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query(
-          `
-          INSERT INTO subscriptions (
-            id, creator_id, subscriber_email, plan, status,
-            amount_cents, currency, started_at, stripe_customer_id,
-            stripe_subscription_id, stripe_price_id, created_at, updated_at
-          )
-          VALUES (
-            gen_random_uuid(),
-            $1,
-            $2,
-            $3,
-            $4,
-            $5,
-            $6,
-            NOW(),
-            $7,
-            $8,
-            $9,
-            NOW(),
-            NOW()
-          )
-          ON CONFLICT (stripe_subscription_id) DO NOTHING
-          `,
-          [
-            creatorId,
-            session.customer_details?.email || null,
-            "default",
-            "active",
-            amountTotal ?? 0,
-            currency,
-            customerId,
-            subscriptionId,
-            priceId
-          ]
-        );
-        await client.query("COMMIT");
-      } catch (dbErr) {
-        await client.query("ROLLBACK");
-        throw dbErr;
-      } finally {
-        client.release();
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        // TODO: hier deine Erfüllung/DB-Update/Access-Freischaltung
+        // z.B. session.client_reference_id, session.customer_email, ...
+        break;
       }
-    }
 
-    return NextResponse.json({ received: true }, { status: 200 });
-  } catch (err: any) {
-    console.error("Webhook handler error:", err);
-    return NextResponse.json({ error: "Webhook handler failed" }, { status: 500 });
+      // weitere Events nach Bedarf
+      // case "invoice.paid":
+      // case "customer.subscription.created":
+      // ...
+
+      default:
+        // Unbehandelte Events sind ok – wir bestätigen nur den Empfang
+        break;
+    }
+  } catch (e: any) {
+    // Eigene Handler-Fehler → 500
+    return new NextResponse(`Handler error: ${e?.message ?? "unknown"}`, { status: 500 });
   }
+
+  // Stripe erwartet eine 2xx-Antwort (JSON oder leer)
+  return NextResponse.json({ received: true });
+}
+
+// GET (und andere) nicht erlaubt – hilft beim Debuggen
+export function GET() {
+  return new NextResponse("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
 }
