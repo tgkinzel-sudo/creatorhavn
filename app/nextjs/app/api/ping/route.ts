@@ -1,10 +1,10 @@
 // app/nextjs/app/api/ping/route.ts
 import { NextResponse } from "next/server";
 
-// Node-Runtime, damit Verhalten wie bei Stripe identisch ist
+// Node-Runtime aktivieren (nicht Edge)
 export const runtime = "nodejs";
 
-// POST zulassen: gibt einfach den Body zurück
+// POST-Methode: gibt einfach den Body zurück
 export async function POST(req: Request) {
   try {
     const json = await req.json();
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
   }
 }
 
-// GET explizit verbieten, um 405 korrekt zu sehen
+// GET explizit verbieten
 export function GET() {
   return new NextResponse("Method Not Allowed", {
     status: 405,
