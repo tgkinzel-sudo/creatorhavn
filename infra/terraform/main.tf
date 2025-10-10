@@ -16,5 +16,4 @@ terraform {
     }
   }
 }
-
-# Noch keine Ressourcen – das ist nur ein "Skeleton", damit init/validate/plan nicht abstürzen.
+# Noch keine Ressourcen – nur Skeleton, damit init/validate/plan laufen.

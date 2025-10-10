@@ -1,1 +1,1 @@
-# Platzhalter – Variablen folgen, sobald wir Ressourcen hinzufügen.
+# Platzhalter – Variablen folgen, wenn wir Ressourcen hinzufügen.
