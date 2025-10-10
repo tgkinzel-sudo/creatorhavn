@@ -1,66 +1,47 @@
-// app/nextjs/app/api/stripe/webhook/route.ts
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import Stripe from "stripe";
 
-// App Router: Runtime & Caching korrekt setzen
-export const runtime = "nodejs";          // nicht Edge – Stripe braucht Node
-export const dynamic = "force-dynamic";   // kein Static/Caching für Webhooks
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-// Stripe SDK initialisieren (achte auf die API-Version zu deinem Account)
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-06-20", // falls nötig, auf deine Stripe-Version anpassen
-});
+// Next 14 Hinweis: statt "export const config = { api:{ bodyParser:false } }"
+// nutzen wir den Text-Body direkt (siehe unten)
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-06-20" });
 
 export async function POST(req: Request) {
-  // Stripe sendet Signatur im Header
   const sig = headers().get("stripe-signature");
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
 
-  if (!sig || !webhookSecret) {
+  if (!sig || !secret) {
     return new NextResponse("Missing Stripe signature or webhook secret", { status: 400 });
   }
 
-  // WICHTIG: Im App Router selbst den RAW Body lesen
-  const rawBody = await req.text();
+  const raw = await req.text();
 
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
+    event = stripe.webhooks.constructEvent(raw, sig, secret);
   } catch (err: any) {
-    // Verifizierungsfehler → sofort 400
     return new NextResponse(`Webhook Error: ${err.message}`, { status: 400 });
   }
 
-  // Business-Logik (vereinfacht – passe an deine App an)
   try {
     switch (event.type) {
-      case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        // TODO: hier deine Erfüllung/DB-Update/Access-Freischaltung
-        // z.B. session.client_reference_id, session.customer_email, ...
+      case "checkout.session.completed":
+        // TODO: Fulfillment/DB-Update
         break;
-      }
-
-      // weitere Events nach Bedarf
-      // case "invoice.paid":
-      // case "customer.subscription.created":
-      // ...
-
       default:
-        // Unbehandelte Events sind ok – wir bestätigen nur den Empfang
+        // andere Events ignorieren
         break;
     }
   } catch (e: any) {
-    // Eigene Handler-Fehler → 500
-    return new NextResponse(`Handler error: ${e?.message ?? "unknown"}`, { status: 500 });
+    return new NextResponse(`Handler error: ${e.message ?? "unknown"}`, { status: 500 });
   }
 
-  // Stripe erwartet eine 2xx-Antwort (JSON oder leer)
   return NextResponse.json({ received: true });
 }
 
-// GET (und andere) nicht erlaubt – hilft beim Debuggen
 export function GET() {
-  return new NextResponse("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
+  return new Response("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
 }
