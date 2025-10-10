@@ -1,39 +1,56 @@
-import { NextResponse } from "next/server";
+// app/nextjs/app/api/checkout/route.ts
 import Stripe from "stripe";
+import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
   apiVersion: "2024-06-20",
 });
 
 export async function POST(req: Request) {
   try {
+    // Body lesen
     const body = await req.json().catch(() => ({}));
-    const price_id = body?.price_id as string | undefined;
-    const creator_id = body?.creator_id as string | undefined;
+    const priceId =
+      body?.priceId ||
+      process.env.STRIPE_PRICE_ID; // optionaler Fallback über Env
 
-    if (!price_id) {
-      return NextResponse.json({ error: "price_id is required" }, { status: 400 });
+    if (!priceId) {
+      return NextResponse.json(
+        { error: "Missing priceId (in body) or STRIPE_PRICE_ID (env)" },
+        { status: 400 }
+      );
     }
 
-    const base = process.env.APP_DOMAIN ?? "https://creatorhavn.com";
+    // Optional: Creator-ID o.ä. aus Body übernehmen
+    const { creatorId } = body ?? {};
+
+    // Stripe Checkout Session erzeugen
     const session = await stripe.checkout.sessions.create({
-      mode: "subscription", // falls Einmalzahlung: "payment"
-      line_items: [{ price: price_id, quantity: 1 }],
-      success_url: `${base}/?success=1`,
-      cancel_url: `${base}/?canceled=1`,
-      client_reference_id: creator_id,
+      mode: "subscription", // oder "payment" — je nach Use-Case
+      line_items: [{ price: priceId, quantity: 1 }],
+      // Passe die URLs an deine Domain an:
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL ?? "https://creatorhavn.vercel.app"}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL ?? "https://creatorhavn.vercel.app"}/cancel`,
+      metadata: creatorId ? { creatorId: String(creatorId) } : undefined,
     });
 
     return NextResponse.json({ url: session.url }, { status: 200 });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "unknown error" }, { status: 500 });
+  } catch (err: any) {
+    console.error("Stripe checkout error:", err);
+    return NextResponse.json(
+      { error: err?.message ?? "Checkout failed" },
+      { status: 500 }
+    );
   }
 }
 
-export function GET() {
-  // 405 für GET – wichtig, damit dein Test per POST funktioniert
-  return new Response("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
+// Für alle anderen Methoden 405
+export async function GET() {
+  return NextResponse.json({ error: "Method Not Allowed" }, { status: 405 });
+}
+export async function PUT() {
+  return NextResponse.json({ error: "Method Not Allowed" }, { status: 405 });
+}
+export async function DELETE() {
+  return NextResponse.json({ error: "Method Not Allowed" }, { status: 405 });
 }
