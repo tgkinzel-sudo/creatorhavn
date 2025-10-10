@@ -1,12 +1,95 @@
-# --- Next.js Build (robust ohne lockfile) ---
-- name: Build Next.js app
-  working-directory: app/nextjs
-  run: |
-    if [ -f package-lock.json ]; then
-      echo "Found package-lock.json -> using npm ci"
-      npm ci
-    else
-      echo "No package-lock.json -> using npm install (will generate lockfile)"
-      npm install
-    fi
-    npm run build
+name: orchestrate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      TF_IN_AUTOMATION: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+          terraform_wrapper: true
+
+      - name: Check required secrets/vars
+        id: check
+        shell: bash
+        env:
+          HAVE_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAVE_VERCEL: ${{ secrets.VERCEL_API_TOKEN != '' }}
+          HAVE_DB: ${{ secrets.DATABASE_URL != '' }}
+          HAVE_STRIPE: ${{ secrets.STRIPE_SECRET_KEY != '' }}
+          HAVE_WH: ${{ secrets.STRIPE_WEBHOOK_SECRET != '' }}
+          HAVE_DOMAIN: ${{ vars.APP_DOMAIN != '' }}
+        run: |
+          set -e
+          missing=()
+          [ "$HAVE_CF"     = "true" ] || missing+=("CLOUDFLARE_API_TOKEN (secret)")
+          [ "$HAVE_VERCEL" = "true" ] || missing+=("VERCEL_API_TOKEN (secret)")
+          [ "$HAVE_DB"     = "true" ] || missing+=("DATABASE_URL (secret)")
+          [ "$HAVE_STRIPE" = "true" ] || missing+=("STRIPE_SECRET_KEY (secret)")
+          [ "$HAVE_WH"     = "true" ] || missing+=("STRIPE_WEBHOOK_SECRET (secret)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required items:"; for m in "${missing[@]}"; do echo " - $m"; done
+            exit 1
+          fi
+          if [ "$HAVE_DOMAIN" = "true" ]; then
+            echo "manage_domains=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "manage_domains=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform fmt & validate
+        working-directory: infra/terraform
+        run: |
+          terraform fmt -recursive
+          terraform init -input=false
+          terraform validate
+
+      - name: Terraform plan
+        working-directory: infra/terraform
+        env:
+          TF_VAR_domain: ${{ vars.APP_DOMAIN }}
+          TF_VAR_manage_domains: ${{ steps.check.outputs.manage_domains }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_vercel_api_token: ${{ secrets.VERCEL_API_TOKEN }}
+          TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
+          TF_VAR_stripe_secret_key: ${{ secrets.STRIPE_SECRET_KEY }}
+          TF_VAR_stripe_webhook_secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+        run: terraform plan -input=false -no-color
+
+      - name: Terraform apply
+        if: github.ref == 'refs/heads/main'
+        working-directory: infra/terraform
+        env:
+          TF_VAR_domain: ${{ vars.APP_DOMAIN }}
+          TF_VAR_manage_domains: ${{ steps.check.outputs.manage_domains }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_vercel_api_token: ${{ secrets.VERCEL_API_TOKEN }}
+          TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
+          TF_VAR_stripe_secret_key: ${{ secrets.STRIPE_SECRET_KEY }}
+          TF_VAR_stripe_webhook_secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+        run: terraform apply -input=false -auto-approve -no-color
