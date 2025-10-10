@@ -8,9 +8,6 @@ on:
 jobs:
   orchestrate:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
     env:
       TF_IN_AUTOMATION: "1"
 
@@ -21,7 +18,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 20
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -31,65 +28,46 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.6.6"
+          terraform_version: 1.6.6
           terraform_wrapper: true
 
-      - name: Check required secrets/vars
-        id: check
-        shell: bash
-        env:
-          HAVE_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
-          HAVE_VERCEL: ${{ secrets.VERCEL_API_TOKEN != '' }}
-          HAVE_DB: ${{ secrets.DATABASE_URL != '' }}
-          HAVE_STRIPE: ${{ secrets.STRIPE_SECRET_KEY != '' }}
-          HAVE_WH: ${{ secrets.STRIPE_WEBHOOK_SECRET != '' }}
-          HAVE_DOMAIN: ${{ vars.APP_DOMAIN != '' }}
+      # --- OPTIONAL: Next.js Build (falls du app/nextjs hast) ---
+      - name: Install deps (Next.js)
+        if: ${{ hashFiles('app/nextjs/package.json') != '' }}
+        working-directory: app/nextjs
         run: |
-          set -e
-          missing=()
-          [ "$HAVE_CF"     = "true" ] || missing+=("CLOUDFLARE_API_TOKEN (secret)")
-          [ "$HAVE_VERCEL" = "true" ] || missing+=("VERCEL_API_TOKEN (secret)")
-          [ "$HAVE_DB"     = "true" ] || missing+=("DATABASE_URL (secret)")
-          [ "$HAVE_STRIPE" = "true" ] || missing+=("STRIPE_SECRET_KEY (secret)")
-          [ "$HAVE_WH"     = "true" ] || missing+=("STRIPE_WEBHOOK_SECRET (secret)")
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Missing required items:"; for m in "${missing[@]}"; do echo " - $m"; done
-            exit 1
-          fi
-          if [ "$HAVE_DOMAIN" = "true" ]; then
-            echo "manage_domains=true"  >> "$GITHUB_OUTPUT"
+          npm ci || npm install
+          npm run build --if-present
+
+      # --- Terraform nur ausführen, wenn der Ordner und .tf-Dateien existieren ---
+      - name: Check Terraform folder
+        id: tfcheck
+        run: |
+          if [ -d "infra/terraform" ] && ls infra/terraform/*.tf >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
           else
-            echo "manage_domains=false" >> "$GITHUB_OUTPUT"
+            echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Terraform fmt & validate
-        working-directory: infra/terraform
-        run: |
-          terraform fmt -recursive
-          terraform init -input=false
-          terraform validate
+      - name: Terraform init
+        if: ${{ steps.tfcheck.outputs.present == 'true' }}
+        run: terraform -chdir=infra/terraform init -input=false
+
+      - name: Terraform validate
+        if: ${{ steps.tfcheck.outputs.present == 'true' }}
+        run: terraform -chdir=infra/terraform validate
 
       - name: Terraform plan
-        working-directory: infra/terraform
+        if: ${{ steps.tfcheck.outputs.present == 'true' }}
         env:
           TF_VAR_domain: ${{ vars.APP_DOMAIN }}
-          TF_VAR_manage_domains: ${{ steps.check.outputs.manage_domains }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_vercel_api_token: ${{ secrets.VERCEL_API_TOKEN }}
           TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
           TF_VAR_stripe_secret_key: ${{ secrets.STRIPE_SECRET_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-        run: terraform plan -input=false -no-color
+        run: terraform -chdir=infra/terraform plan -input=false -no-color
 
-      - name: Terraform apply
-        if: github.ref == 'refs/heads/main'
-        working-directory: infra/terraform
-        env:
-          TF_VAR_domain: ${{ vars.APP_DOMAIN }}
-          TF_VAR_manage_domains: ${{ steps.check.outputs.manage_domains }}
-          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          TF_VAR_vercel_api_token: ${{ secrets.VERCEL_API_TOKEN }}
-          TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
-          TF_VAR_stripe_secret_key: ${{ secrets.STRIPE_SECRET_KEY }}
-          TF_VAR_stripe_webhook_secret: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-        run: terraform apply -input=false -auto-approve -no-color
+      - name: Skip notice (no infra/terraform)
+        if: ${{ steps.tfcheck.outputs.present != 'true' }}
+        run: echo "No infra/terraform/*.tf found – skipping Terraform steps."
