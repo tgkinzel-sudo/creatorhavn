@@ -1,33 +1,49 @@
-// app/nextjs/app/api/stripe/webhook/route.ts
+// app/api/stripe/webhook/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: "2024-06-20",
+});
 
 export async function POST(req: Request) {
   try {
     const sig = req.headers.get("stripe-signature");
-    if (!sig)
-      return NextResponse.json({ error: "Missing signature" }, { status: 400 });
-
-    const buf = Buffer.from(await req.arrayBuffer());
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-      apiVersion: "2023-10-16", // ✅ Kompatible Version
-    });
-
-    const event = stripe.webhooks.constructEvent(
-      buf,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET as string
-    );
-
-    // Beispiel: du kannst hier auf Events reagieren
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object as Stripe.Checkout.Session;
-      console.log("✅ Checkout abgeschlossen:", session.id);
+    if (!sig) {
+      return NextResponse.json({ error: "Missing Stripe-Signature header" }, { status: 400 });
     }
 
-    return NextResponse.json({ received: true }, { status: 200 });
+    const buf = Buffer.from(await req.arrayBuffer());
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!webhookSecret) {
+      return NextResponse.json({ error: "Missing STRIPE_WEBHOOK_SECRET" }, { status: 500 });
+    }
+
+    const event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
+
+   switch (event.type) {
+  case "checkout.session.completed": {
+    const session: any = event.data.object;
+    console.log("✅ checkout.session.completed", session.id);
+    break;
+  }
+  case "customer.subscription.created":
+  case "customer.subscription.updated":
+  case "customer.subscription.deleted": {
+    const sub: any = event.data.object;
+    console.log(`ℹ️ ${event.type}`, sub.id, sub.status);
+    break;
+  }
+  default:
+    console.log("➡️ Unhandled event type:", event.type);
+}
+    return NextResponse.json({ received: true });
   } catch (err: any) {
-    console.error("Stripe webhook error:", err);
-    return NextResponse.json({ error: err.message }, { status: 400 });
+    console.error("Stripe Webhook Error:", err?.message || err);
+    return NextResponse.json({ error: err?.message || "Invalid payload" }, { status: 400 });
   }
 }
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
