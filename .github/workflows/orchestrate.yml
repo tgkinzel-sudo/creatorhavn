@@ -1,3 +1,8 @@
+# Inhalt einfügen, speichern: Ctrl+O, Enter, schließen: Ctrl+X
+
+git add .github/workflows/orchestrate.yml
+git commit -m "ci: robust orchestrate workflow (app build independent; infra gated & idempotent)"
+git push -u origin main
 name: orchestrate
 
 on:
