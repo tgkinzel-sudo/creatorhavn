@@ -16,6 +16,27 @@ export async function POST(req: Request) {
       );
     }
 
-    // Stripe-Checkout-Session erstellen
+    // Stripe Checkout-Session erstellen
     const session = await stripe.checkout.sessions.create({
-      mode: "subscription", // oder "payment", falls
+      mode: "subscription", // oder "payment", falls kein Abo
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      success_url: `${process.env.APP_DOMAIN}/success`,
+      cancel_url: `${process.env.APP_DOMAIN}/cancel`,
+    });
+
+    // Session-URL an Client zurückgeben
+    return NextResponse.json({ url: session.url });
+  } catch (err: any) {
+    console.error("Stripe Checkout Error:", err);
+    return NextResponse.json(
+      { error: err.message || "Internal Server Error" },
+      { status: 500 }
+    );
+  }
+}
