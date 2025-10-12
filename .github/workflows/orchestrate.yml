@@ -1,182 +1,48 @@
-# Inhalt einfügen, speichern: Ctrl+O, Enter, schließen: Ctrl+X
-
-git add .github/workflows/orchestrate.yml
-git commit -m "ci: robust orchestrate workflow (app build independent; infra gated & idempotent)"
-git push -u origin main
 name: orchestrate
 
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build_app:
-    name: Build Next.js (creatorhavn)
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        shell: bash
+  build-next:
+    name: Build Next.js (app/nextjs)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Use Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: npm
           cache-dependency-path: app/nextjs/package-lock.json
 
-      - name: Print paths (debug)
-        run: |
-          pwd
-          ls -la
-          ls -la app || true
-          ls -la app/nextjs || true
-
-      # App-Build braucht keine Stripe/Cloudflare Tokens. Wir machen den Build daher unabhängig.
-      - name: Install deps (prefer ci, fallback to install)
+      - name: Install deps
         working-directory: app/nextjs
         run: |
           if [ -f package-lock.json ]; then
-            echo "Found lockfile -> trying npm ci"
-            npm ci || { echo "npm ci failed, falling back to npm install"; npm install; }
+            npm ci
           else
-            echo "No lockfile -> npm install"
             npm install
           fi
 
       - name: Build
         working-directory: app/nextjs
-        run: npm run build
-
-      - name: Archive build artifacts (optional)
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: next-build
-          path: |
-            app/nextjs/.next
-            app/nextjs/package.json
-            app/nextjs/package-lock.json
-          retention-days: 3
-
-      # Erkennen, ob wir Infra managen sollen: only if infra/terraform folder exists
-      - name: Detect infra folder
-        id: detect_infra
-        run: |
-          if [ -d "infra/terraform" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Secrets/Vars prüfen NUR für die Infra-Phase
-      - name: Check required secrets for infra
-        id: check_secrets
-        if: steps.detect_infra.outputs.present == 'true'
         env:
-          CF: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          VERCEL: ${{ secrets.VERCEL_API_TOKEN }}
-          DBURL: ${{ secrets.DATABASE_URL }}
-          STRIPE: ${{ secrets.STRIPE_SECRET_KEY }}
-          WH: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-          DOMAIN: ${{ vars.APP_DOMAIN }}
-        run: |
-          set -e
-          missing=()
-
-          [ -n "$VERCEL" ] || missing+=("VERCEL_API_TOKEN (secret)")
-          # Cloudflare & Domain sind optional – nur wenn DOMAIN gesetzt ist, fordern wir CF an:
-          if [ -n "$DOMAIN" ]; then
-            [ -n "$CF" ]     || missing+=("CLOUDFLARE_API_TOKEN (secret)")
-          fi
-          # Datenbank/Stripe sind nur nötig, wenn Terraform die EnvVars in Vercel „upsertet“
-          [ -n "$DBURL" ] || missing+=("DATABASE_URL (secret)")
-          [ -n "$STRIPE" ] || missing+=("STRIPE_SECRET_KEY (secret)")
-          [ -n "$WH" ]     || missing+=("STRIPE_WEBHOOK_SECRET (secret)")
-
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::warning::Infra will be skipped. Missing items:"
-            for m in "${missing[@]}"; do echo " - $m"; done
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set outputs for infra decision
-        id: infra_gate
-        if: steps.detect_infra.outputs.present == 'true'
-        run: |
-          echo "run_infra=${{ steps.check_secrets.outputs.ok }}" >> "$GITHUB_OUTPUT"
-
-  infra:
-    name: Terraform (Vercel/Cloudflare)
-    runs-on: ubuntu-24.04
-    needs: build_app
-    if: needs.build_app.outputs.run_infra == 'true'
-    env:
-      TF_IN_AUTOMATION: "1"
-      TF_VAR_vercel_api_token:       ${{ secrets.VERCEL_API_TOKEN }}
-      TF_VAR_cloudflare_api_token:   ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      TF_VAR_database_url:           ${{ secrets.DATABASE_URL }}
-      TF_VAR_stripe_secret_key:      ${{ secrets.STRIPE_SECRET_KEY }}
-      TF_VAR_stripe_webhook_secret:  ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-      TF_VAR_domain:                 ${{ vars.APP_DOMAIN }}
-      TF_VAR_manage_domains:         ${{ vars.APP_DOMAIN != '' }}
-      PROJECT_ID:                    prj_xE7CzqqkVegCAwWpB0NbOmp0s1lj
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.6
-          terraform_wrapper: false
-
-      - name: Ensure terraform dir exists
-        run: |
-          if [ ! -d "infra/terraform" ]; then
-            echo "::error::Missing folder infra/terraform – skipping infra job."
-            exit 1
-          fi
-
-      - name: Terraform init
-        working-directory: infra/terraform
-        run: terraform init -input=false
-
-      - name: Terraform fmt check
-        working-directory: infra/terraform
-        run: terraform fmt -recursive -check
-
-      - name: Terraform validate
-        working-directory: infra/terraform
-        run: terraform validate
-
-      # Import vorhandenes Vercel-Projekt, damit Terraform nicht versucht, ein neues anzulegen.
-      - name: Terraform import project (idempotent)
-        working-directory: infra/terraform
-        run: |
-          terraform import -input=false vercel_project.app "${PROJECT_ID}" || true
-
-      # Optional: vorhandene Domains importieren, nur wenn APP_DOMAIN gesetzt ist
-      - name: Terraform import domains (idempotent)
-        if: env.TF_VAR_manage_domains == 'true'
-        working-directory: infra/terraform
-        run: |
-          APEX="${TF_VAR_domain}"
-          WWW="www.${TF_VAR_domain}"
-          terraform import -input=false vercel_project_domain.apex "${PROJECT_ID}:${APEX}" || true
-          terraform import -input=false vercel_project_domain.www  "${PROJECT_ID}:${WWW}"  || true
-
-      - name: Terraform plan
-        working-directory: infra/terraform
-        run: terraform plan -input=false -no-color
-
-      - name: Terraform apply
-        working-directory: infra/terraform
-        run: terraform apply -auto-approve -input=false -no-color
+          NEXT_TELEMETRY_DISABLED: 1
+          # Stripe/DB-Env nur setzen, wenn vorhanden – Next liest sie ggf. zur Buildzeit
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+        run: npm run build
