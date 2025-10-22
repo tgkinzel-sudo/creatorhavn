@@ -8,7 +8,7 @@
  */
 export function requireAdmin(req: Request) {
   const provided = req.headers.get("x-admin-key") ?? "";
-  const expected = process.env.ADMIN_API_KEY ?? "";
+  const expected = process.env.ADMIN_TOKEN ?? process.env.ADMIN_API_KEY ?? "";
 
   if (!expected) {
     const err = new Error("ADMIN_API_KEY not configured");
