@@ -4,7 +4,7 @@ import Stripe from "stripe";
 import { requireAdmin } from "@/app/lib/admin-auth";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2023-10-16", // kompatibel mit deinem Setup
+  apiVersion: "2024-06-20", // kompatibel mit deinem Setup
 });
 
 export async function POST(req: NextRequest) {
