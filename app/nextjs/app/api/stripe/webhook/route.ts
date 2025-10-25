@@ -1,49 +1,69 @@
-// app/api/stripe/webhook/route.ts
-import { NextResponse } from "next/server";
+// app/nextjs/app/api/stripe/webhook/route.ts
+import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+import { pool } from "@/lib/db"; // siehe db.ts unten
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2024-06-20",
-});
+// Stripe SDK mit deiner installierten Version typverträglich initialisieren.
+// Empfohlen: ohne apiVersion-String; Stripe nimmt dann die passende SDK-Version.
+// Wenn du eine feste Version willst, nutze exakt die, die dein Stripe-Paket-Types zulässt.
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 
-export async function POST(req: Request) {
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+// ✅ Health/Selftest: erlaubt GET, damit Vercel/GitHub-Jobs prüfen können, ob Route erreichbar ist (Stripe nutzt POST).
+export async function GET() {
+  return NextResponse.json({ ok: true, route: "/api/stripe/webhook" });
+}
+
+// ✅ Webhook: Stripe schickt POST + Signatur-Header
+export async function POST(req: NextRequest) {
   try {
-    const sig = req.headers.get("stripe-signature");
-    if (!sig) {
-      return NextResponse.json({ error: "Missing Stripe-Signature header" }, { status: 400 });
-    }
-
-    const buf = Buffer.from(await req.arrayBuffer());
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
     if (!webhookSecret) {
-      return NextResponse.json({ error: "Missing STRIPE_WEBHOOK_SECRET" }, { status: 500 });
+      return NextResponse.json(
+        { error: "STRIPE_WEBHOOK_SECRET not set" },
+        { status: 500 }
+      );
     }
 
-    const event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
+    const sig = req.headers.get("stripe-signature") || "";
+    const buf = Buffer.from(await req.arrayBuffer());
 
-   switch (event.type) {
-  case "checkout.session.completed": {
-    const session: any = event.data.object;
-    console.log("✅ checkout.session.completed", session.id);
-    break;
-  }
-  case "customer.subscription.created":
-  case "customer.subscription.updated":
-  case "customer.subscription.deleted": {
-    const sub: any = event.data.object;
-    console.log(`ℹ️ ${event.type}`, sub.id, sub.status);
-    break;
-  }
-  default:
-    console.log("➡️ Unhandled event type:", event.type);
-}
+    let event: Stripe.Event;
+
+    try {
+      event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
+    } catch (err: any) {
+      console.error("❌ Invalid signature:", err?.message);
+      return NextResponse.json({ error: "invalid signature" }, { status: 400 });
+    }
+
+    // 💾 Event in DB schreiben (id, type, raw payload)
+    try {
+      await pool.query(
+        `insert into stripe_events (id, type, payload) values ($1, $2, $3)
+         on conflict (id) do nothing`,
+        [event.id, event.type, event as any]
+      );
+    } catch (dbErr: any) {
+      console.error("❌ DB insert failed", dbErr);
+      // Nicht 500 geben (Stripe würde retrys machen) – nur loggen und 200 OK zurück,
+      // oder 202 Accepted, je nach Wunsch. Hier 200, damit kein Retry-Sturm entsteht.
+    }
+
+    // 🎯 Minimal-Handler – erweitere nach Bedarf
+    switch (event.type) {
+      case "checkout.session.completed": {
+        // const session = event.data.object as Stripe.Checkout.Session;
+        console.log("✅ checkout.session.completed", event.id);
+        break;
+      }
+      default:
+        console.log("ℹ️ unhandled event", event.type);
+    }
+
     return NextResponse.json({ received: true });
-  } catch (err: any) {
-    console.error("Stripe Webhook Error:", err?.message || err);
-    return NextResponse.json({ error: err?.message || "Invalid payload" }, { status: 400 });
+  } catch (e: any) {
+    console.error("❌ Webhook error", e);
+    return NextResponse.json({ error: "webhook handler error" }, { status: 500 });
   }
 }
-
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
