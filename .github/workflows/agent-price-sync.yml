@@ -1,0 +1,35 @@
+name: Agent Price/Env/Deploy Sync (Live)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "17 * * * *" # stündlich um Minute 17
+
+permissions:
+  contents: read
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+      - name: Run Agent (Price/Env/Deploy)
+        env:
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+          # Optional – nur wenn du per Workflow steuern willst (Variante B):
+          STRIPE_LOOKUP_KEY: ${{ secrets.STRIPE_LOOKUP_KEY }}
+          STRIPE_AMOUNT_CENTS: ${{ secrets.STRIPE_AMOUNT_CENTS }}
+          STRIPE_CURRENCY: ${{ secrets.STRIPE_CURRENCY }}
+          STRIPE_INTERVAL: ${{ secrets.STRIPE_INTERVAL }}
+          STRIPE_PRODUCT_NAME: ${{ secrets.STRIPE_PRODUCT_NAME }}
+          # Oder feste LIVE-Price-ID durchreichen (Variante A):
+          NEXT_PUBLIC_STRIPE_PRICE_ID: ${{ vars.NEXT_PUBLIC_STRIPE_PRICE_ID }}
+        run: |
+          bash scripts/agent-price-sync.sh
