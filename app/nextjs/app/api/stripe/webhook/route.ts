@@ -1,16 +1,11 @@
-// app/nextjs/app/api/stripe/webhook/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { pool } from "@/lib/db"; // siehe db.ts unten
+import { pool } from "@/lib/db";
 
-// Stripe SDK mit deiner installierten Version typverträglich initialisieren.
-// Empfohlen: ohne apiVersion-String; Stripe nimmt dann die passende SDK-Version.
-// Wenn du eine feste Version willst, nutze exakt die, die dein Stripe-Paket-Types zulässt.
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
-
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-// ✅ Health/Selftest: erlaubt GET, damit Vercel/GitHub-Jobs prüfen können, ob Route erreichbar ist (Stripe nutzt POST).
+// ✅ Public Selftest erlaubt GET:
 export async function GET() {
   return NextResponse.json({ ok: true, route: "/api/stripe/webhook" });
 }
