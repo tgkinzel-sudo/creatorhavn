@@ -1,68 +1,99 @@
 // app/nextjs/app/api/admin/health/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
-import { requireAdmin } from "@/app/lib/admin-auth";
+
+function requireAdmin(req: NextRequest) {
+  const header = req.headers.get("x-admin-key");
+  const expected = process.env.ADMIN_API_KEY;
+  if (!expected || header !== expected) {
+    throw new Error("unauthorized");
+  }
+}
+
+function resolveBaseUrl(req: NextRequest): string {
+  // 1) explizit gesetzte Public-URL bevorzugen
+  const fromEnv =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL ||
+    process.env.VERCEL_BRANCH_URL ||
+    process.env.VERCEL_URL;
+
+  if (fromEnv) {
+    // VERCEL_URL ist oft ohne Schema -> Schema ergänzen
+    if (/^https?:\/\//i.test(fromEnv)) return fromEnv.replace(/\/$/, "");
+    return `https://${fromEnv}`.replace(/\/$/, "");
+  }
+
+  // 2) Fallback: Origin aus der aktuellen Request ableiten
+  const proto =
+    req.headers.get("x-forwarded-proto") ||
+    (process.env.NODE_ENV === "production" ? "https" : "http");
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
+  if (host) return `${proto}://${host}`.replace(/\/$/, "");
+
+  // 3) letzter Fallback: absoluter Fehler, aber nicht crashen
+  return "http://localhost:3000";
+}
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
-    requireAdmin(req); // prüft x-admin-key Header
+    // Admin prüfen
+    try {
+      requireAdmin(req);
+    } catch {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
 
-    const out: Record<string, any> = {
-      env: {},
-      db: {},
-      webhook: {},
+    // Env-Check
+    const env = {
+      DATABASE_URL: Boolean(process.env.DATABASE_URL),
+      STRIPE_SECRET_KEY: Boolean(process.env.STRIPE_SECRET_KEY),
+      STRIPE_WEBHOOK_SECRET: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+      ADMIN_API_KEY: Boolean(process.env.ADMIN_API_KEY),
+      NEXT_PUBLIC_STRIPE_PRICE_ID: Boolean(
+        process.env.NEXT_PUBLIC_STRIPE_PRICE_ID
+      ),
     };
 
-    // 1) ENV vorhanden?
-    const envKeys = [
-      "DATABASE_URL",
-      "STRIPE_SECRET_KEY",
-      "STRIPE_WEBHOOK_SECRET",
-      "ADMIN_API_KEY",
-      "NEXT_PUBLIC_STRIPE_PRICE_ID",
-    ];
-    envKeys.forEach((k) => (out.env[k] = !!process.env[k]));
-
-    // 2) DB erreichbar + kleiner Roundtrip
+    // DB-Check
+    let db = { connected: false, stripe_events_rows: 0 as number | null };
     try {
-      const pong = await pool.query("select 1 as ok");
-      out.db.connected = pong.rows?.[0]?.ok === 1;
-      // Kleine Abfrage auf Events (ohne Fehler zu werfen)
+      const client = await pool.connect();
+      db.connected = true;
       try {
-        const cnt = await pool.query("select count(*)::int as c from stripe_events");
-        out.db.stripe_events_rows = cnt.rows?.[0]?.c ?? 0;
+        const res = await client.query(
+          "select count(*)::int as n from stripe_events"
+        );
+        db.stripe_events_rows = res.rows?.[0]?.n ?? 0;
       } catch {
-        out.db.stripe_events_rows = null;
+        db.stripe_events_rows = 0;
+      } finally {
+        client.release();
       }
-    } catch (dbErr: any) {
-      out.db.connected = false;
-      out.db.error = String(dbErr?.message || dbErr);
+    } catch {
+      db.connected = false;
     }
 
-    // 3) Webhook-Route erreichbar (GET)
+    // Webhook-GET über absolute URL prüfen
+    const base = resolveBaseUrl(req);
+    let webhook = { get_ok: false, status: 0 };
     try {
-      const base =
-        process.env.NEXT_PUBLIC_SITE_URL ||
-        process.env.VERCEL_URL?.startsWith("http") ? process.env.VERCEL_URL : `https://${process.env.VERCEL_URL}`;
-      const url = base ? `${base}/api/stripe/webhook` : `${req.nextUrl.origin}/api/stripe/webhook`;
-      const res = await fetch(url, { method: "GET", cache: "no-store" });
-      out.webhook.get_ok = res.ok;
-      out.webhook.status = res.status;
-    } catch (e: any) {
-      out.webhook.get_ok = false;
-      out.webhook.error = String(e?.message || e);
+      const r = await fetch(`${base}/api/stripe/webhook`, {
+        method: "GET",
+        // wichtig: keine Admin-Header mitsenden, das ist öffentlicher Ping
+        // next: { revalidate: 0 }  // optional
+      });
+      webhook = { get_ok: r.ok, status: r.status };
+    } catch {
+      webhook = { get_ok: false, status: 0 };
     }
 
-    // Ampel
-    out.ok =
-      out.env.DATABASE_URL &&
-      out.env.STRIPE_SECRET_KEY &&
-      out.env.STRIPE_WEBHOOK_SECRET &&
-      out.db.connected &&
-      out.webhook.get_ok;
+    const ok = env.DATABASE_URL && env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET && db.connected && webhook.get_ok;
 
-    return NextResponse.json(out, { status: out.ok ? 200 : 503 });
+    return NextResponse.json({ env, db, webhook, ok }, { status: ok ? 200 : 500 });
   } catch (e: any) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: e?.message ?? "unknown" }, { status: 500 });
   }
 }
