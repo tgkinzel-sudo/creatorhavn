@@ -1,0 +1,20 @@
+name: agent2-recount
+
+on:
+  schedule:
+    - cron: "13 4 * * *" # täglich 04:13 UTC
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recount via internal API
+        run: |
+          curl -s -X POST "https://creatorhavn.vercel.app/api/admin/creators/recount" \
+            -H "x-admin-key: $ADMIN_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"limit": 50}' \
+          | jq .
+        env:
+          ADMIN_KEY: ${{ secrets.ADMIN_API_KEY }}
