@@ -80,11 +80,15 @@ export async function GET(req: NextRequest) {
     const base = resolveBaseUrl(req);
     let webhook = { get_ok: false, status: 0 };
     try {
-      const r = await fetch(`${base}/api/stripe/webhook`, {
-        method: "GET",
-        // wichtig: keine Admin-Header mitsenden, das ist öffentlicher Ping
-        // next: { revalidate: 0 }  // optional
-      });
+    const r = await fetch(`${base}/api/stripe/webhook`, {
+  method: "GET",
+  headers: {
+    // explizit KEINE auth header mitsenden
+    "Cache-Control": "no-cache",
+  },
+  cache: "no-store",
+  redirect: "follow",
+});
       webhook = { get_ok: r.ok, status: r.status };
     } catch {
       webhook = { get_ok: false, status: 0 };
